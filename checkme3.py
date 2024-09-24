@@ -51,6 +51,7 @@ def process_file(file_path, os_filters, capacity_ranges):
             (df[capacity_col] <= max_capacity)
         ]
         if not filtered_df.empty:
+            # Group by OS and sum the counts for the same OS within the capacity range
             grouped_result = filtered_df.groupby(os_col).size().reset_index(name='Count')
             grouped_result['Capacity Range'] = label
             grouped_result['OS according to the configuration file'] = grouped_result[os_col]
@@ -105,12 +106,18 @@ def parallel_process_files(file_paths, capacity_ranges):
     return combined_results_by_range, photon_summary, all_os_filters
 
 def insert_break_and_sum(df):
-    # For each capacity range, add a "Disk OS Sum" row
+    # For each capacity range, group the results by OS, sum the counts, and add a "Disk OS Sum" row
     df_with_sums = pd.DataFrame()
-    
+
     # Group by capacity range and add a sum row after each group
     for label in df['Capacity Range'].unique():
         grouped_df = df[df['Capacity Range'] == label].copy()
+        
+        # Group by 'OS according to the configuration file' and sum the counts for each OS
+        grouped_df = grouped_df.groupby('OS according to the configuration file', as_index=False).agg({'Count': 'sum'})
+        grouped_df['Capacity Range'] = label
+        
+        # Calculate the total count for this capacity range
         total_count = grouped_df['Count'].sum()
         
         # Add sum row for this capacity range
@@ -121,10 +128,31 @@ def insert_break_and_sum(df):
             'OS according to the VMware Tools': ['']
         })
         
-        # Concatenate the results for this capacity range, followed by the sum row
-        df_with_sums = pd.concat([df_with_sums, grouped_df, break_df], ignore_index=True)
+        # Add a blank row after the "Disk OS Sum" row
+        blank_row = pd.DataFrame({
+            'OS according to the configuration file': [''],
+            'Count': [''],
+            'Capacity Range': [''],
+            'OS according to the VMware Tools': ['']
+        })
+        
+        # Concatenate the results for this capacity range, followed by the sum row and the blank row
+        df_with_sums = pd.concat([df_with_sums, grouped_df, break_df, blank_row], ignore_index=True)
     
     return df_with_sums
+
+def insert_total_machine_count(df):
+    """Inserts a row for 'Total Machine Count' before the Photon OS block."""
+    total_machine_count = df[df['OS according to the configuration file'] == 'Disk OS Sum']['Count'].sum()
+
+    total_row = pd.DataFrame({
+        'OS according to the configuration file': ['Total Machine Count'],
+        'Count': [total_machine_count],
+        'Capacity Range': [''],
+        'OS according to the VMware Tools': ['']
+    })
+
+    return pd.concat([df, total_row], ignore_index=True)
 
 def main():
     parser = argparse.ArgumentParser(description="Process Excel files and generate OS disk capacity reports.")
@@ -161,8 +189,9 @@ def main():
     # If we have capacity-based results, process them and add sum rows for each capacity range
     if not combined_results_by_range.empty:
         combined_results_with_sum = insert_break_and_sum(combined_results_by_range)
+        combined_results_with_total = insert_total_machine_count(combined_results_with_sum)
     else:
-        combined_results_with_sum = pd.DataFrame()
+        combined_results_with_total = pd.DataFrame()
 
     # Insert sum row for Photon OS if photon_combined is not empty
     if not photon_combined.empty:
@@ -175,19 +204,25 @@ def main():
             'Capacity Range': ['All Capacities'],
             'OS according to the VMware Tools': ['']
         })
-        combined_results_with_sum = pd.concat([combined_results_with_sum, photon_combined, photon_total_row], ignore_index=True)
+        blank_row = pd.DataFrame({
+            'OS according to the configuration file': [''],
+            'Count': [''],
+            'Capacity Range': [''],
+            'OS according to the VMware Tools': ['']
+        })
+        combined_results_with_total = pd.concat([combined_results_with_total, photon_combined, photon_total_row, blank_row], ignore_index=True)
 
     # Rearrange columns to have 'OS according to the configuration file' as the first column
     column_order = ['OS according to the configuration file', 'Count', 'Capacity Range', 'OS according to the VMware Tools']
-    combined_results_with_sum = combined_results_with_sum[column_order]
+    combined_results_with_total = combined_results_with_total[column_order]
 
     # Output the combined result to a single CSV file
     output_file = os.path.join(dst_folder, args.name)
-    combined_results_with_sum.to_csv(output_file, index=False)
+    combined_results_with_total.to_csv(output_file, index=False)
 
     # Debug: Print the columns of the resulting DataFrame to confirm structure
     print(f"Output file: {output_file}")
-    print("Columns in final result:", combined_results_with_sum.columns.tolist())
+    print("Columns in final result:", combined_results_with_total.columns.tolist())
     print(f"Unique OS Filters used: {list(unique_os_filters)}")  # Debugging OS Filters
 
 if __name__ == "__main__":
