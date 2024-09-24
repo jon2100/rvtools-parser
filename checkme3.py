@@ -180,9 +180,6 @@ def main():
     src_folder = os.path.abspath(args.source)
     dst_folder = os.path.abspath(args.destination)
 
-    # Get the list of Excel files from the source folder
-    file_paths = [os.path.join(src_folder, f) for f in os.listdir(src_folder) if f.endswith('.xlsx')]
-
     # Define capacity ranges, with "0 MB - 149 MB" appearing first
     capacity_ranges = [
         (0, 149, '0 MB - 149 MB'),
@@ -197,6 +194,11 @@ def main():
 
     # Process files in parallel and gather OS and Photon OS data
     combined_results_by_range, photon_combined_by_range, unique_os_filters = parallel_process_files(file_paths, capacity_ranges)
+
+    # Ensure the capacity range ordering remains consistent
+    combined_results_by_range['Capacity Range'] = pd.Categorical(combined_results_by_range['Capacity Range'], 
+                                                                 categories=[x[2] for x in capacity_ranges], ordered=True)
+    combined_results_by_range = combined_results_by_range.sort_values('Capacity Range')
 
     # If we have capacity-based results, process them and add sum rows for each capacity range
     if not combined_results_by_range.empty:
