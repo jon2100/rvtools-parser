@@ -6,6 +6,9 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm  # Import the tqdm progress bar
 
+# Conversion factor for MiB to MB
+MIB_TO_MB = 1.048576
+
 def load_unique_os_filters(file_paths):
     """Dynamically load unique OS filters from the 'OS according to the configuration file' column in the given Excel files."""
     os_filters = set()
@@ -20,20 +23,46 @@ def process_file(file_path, os_filters, min_capacity, max_capacity):
     """Process a single Excel file and return grouped results."""
     df = pd.read_excel(file_path)
     
-    capacity_col = df.columns[df.columns.str.contains("Total disk capacity MiB", case=False)].tolist()[0]
-    os_col = df.columns[df.columns.str.contains("OS according to the configuration file", case=False)].tolist()[0]
+    # Find the OS column and check if it exists
+    os_col_candidates = df.columns[df.columns.str.contains("OS according to the configuration file", case=False)]
     
+    if os_col_candidates.empty:
+        print(f"Column 'OS according to the configuration file' not found in {file_path}. Skipping file.")
+        return None
+    
+    os_col = os_col_candidates.tolist()[0]  # Use the first matching column
+
+    # Try to find the column for capacity (MiB) in a flexible way
+    capacity_col_candidates = df.columns[df.columns.str.contains("Total.*disk.*capacity.*(MiB|MB)", case=False)]
+    
+    if capacity_col_candidates.empty:
+        raise ValueError(f"Could not find the capacity column in file: {file_path}")
+    
+    capacity_col = capacity_col_candidates.tolist()[0]  # Use the first matching column
+
+    # Filter out rows that contain 'Template', 'SRM Placeholder', or 'AdditionalBackEnd'
     if 'Template' in df.columns and 'SRM Placeholder' in df.columns:
         df = df[(df['Template'] != True) & (df['SRM Placeholder'] != True)]
 
     df = df[~df[os_col].astype(str).str.contains('Template|SRM Placeholder|AdditionalBackEnd', case=False, na=False)]
 
+    # Convert MiB to MB (if necessary) by checking if the capacity column has 'MiB' in its name
+    if "MiB" in capacity_col:
+        df[capacity_col] = df[capacity_col] * MIB_TO_MB  # Convert MiB to MB
+
+    # Filter by capacity range and OS filters
     filtered_df = df[
         (df[capacity_col] >= min_capacity) &
         (df[capacity_col] <= max_capacity) &
         (df[os_col].isin(os_filters))
     ]
 
+    # Check if the filtered dataframe is empty; if so, skip this file
+    if filtered_df.empty:
+        print(f"No matching OS data in {file_path}. Skipping file.")
+        return None
+
+    # Group the results by OS
     grouped_result = filtered_df.groupby(os_col).size().reset_index(name='Count')
     return grouped_result
 
@@ -41,7 +70,14 @@ def count_os_by_capacity(file_paths, os_filters, min_capacity, max_capacity):
     results = []
     # Wrap the iteration over files with tqdm for the progress bar
     for file_path in tqdm(file_paths, desc="Processing files by capacity"):
-        results.append(process_file(file_path, os_filters, min_capacity, max_capacity))
+        result = process_file(file_path, os_filters, min_capacity, max_capacity)
+        if result is not None:
+            results.append(result)  # Only append if the result is not None (i.e., data exists)
+    
+    # If no results are collected, return an empty DataFrame
+    if not results:
+        return pd.DataFrame(columns=["OS according to the configuration file", "Count"])
+    
     combined_df = pd.concat(results, ignore_index=True)
     return combined_df.groupby(combined_df.columns[0]).sum().reset_index()
 
@@ -105,9 +141,10 @@ def main():
     combined_results = pd.DataFrame()
     for min_capacity, max_capacity, label in capacity_ranges:
         result = count_os_by_capacity(file_paths, os_filters, min_capacity, max_capacity)
-        result['Capacity Range'] = label
-        result_with_sum = insert_break_and_sum(result)
-        combined_results = pd.concat([combined_results, result_with_sum], ignore_index=True)
+        if not result.empty:  # Ensure to only process non-empty results
+            result['Capacity Range'] = label
+            result_with_sum = insert_break_and_sum(result)
+            combined_results = pd.concat([combined_results, result_with_sum], ignore_index=True)
 
     # Calculate total sum of all group sums
     total_machine_count = combined_results[combined_results['OS according to the configuration file'] == 'Disk OS Sum']['Count'].sum()
