@@ -4,11 +4,12 @@ import pandas as pd
 import os
 import argparse
 from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm  # Import the tqdm progress bar
 
 def load_unique_os_filters(file_paths):
     """Dynamically load unique OS filters from the 'OS according to the configuration file' column in the given Excel files."""
     os_filters = set()
-    for file_path in file_paths:
+    for file_path in tqdm(file_paths, desc="Loading OS filters from files"):
         df = pd.read_excel(file_path)
         os_col = df.columns[df.columns.str.contains("OS according to the configuration file", case=False)].tolist()
         if os_col:
@@ -37,17 +38,17 @@ def process_file(file_path, os_filters, min_capacity, max_capacity):
     return grouped_result
 
 def count_os_by_capacity(file_paths, os_filters, min_capacity, max_capacity):
-    with ProcessPoolExecutor() as executor:
-        results = executor.map(process_file, file_paths, [os_filters] * len(file_paths), 
-                                [min_capacity] * len(file_paths), [max_capacity] * len(file_paths))
-
+    results = []
+    # Wrap the iteration over files with tqdm for the progress bar
+    for file_path in tqdm(file_paths, desc="Processing files by capacity"):
+        results.append(process_file(file_path, os_filters, min_capacity, max_capacity))
     combined_df = pd.concat(results, ignore_index=True)
     return combined_df.groupby(combined_df.columns[0]).sum().reset_index()
 
 def filter_photon_os(file_paths):
     combined_photon_df = pd.DataFrame()
 
-    for file_path in file_paths:
+    for file_path in tqdm(file_paths, desc="Filtering VMware Photon OS"):
         df = pd.read_excel(file_path)
         
         vmware_os_col = df.columns[df.columns.str.contains("OS according to the VMware Tools", case=False)].tolist()
@@ -100,7 +101,7 @@ def main():
     # Create destination folder if it doesn't exist
     os.makedirs(dst_folder, exist_ok=True)
 
-    # Process each capacity range
+    # Process each capacity range with a progress bar
     combined_results = pd.DataFrame()
     for min_capacity, max_capacity, label in capacity_ranges:
         result = count_os_by_capacity(file_paths, os_filters, min_capacity, max_capacity)
