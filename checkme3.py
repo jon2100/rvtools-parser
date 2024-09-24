@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 
 import pandas as pd
@@ -44,7 +45,7 @@ def process_file(file_path, os_filters, capacity_ranges):
         df[capacity_col] = df[capacity_col] * MIB_TO_MB
 
     # Prepare results for each capacity range
-    results_by_range = {}
+    results_by_range = []
     for min_capacity, max_capacity, label in capacity_ranges:
         filtered_df = df[
             (df[capacity_col] >= min_capacity) &
@@ -54,7 +55,7 @@ def process_file(file_path, os_filters, capacity_ranges):
         if not filtered_df.empty:
             grouped_result = filtered_df.groupby(os_col).size().reset_index(name='Count')
             grouped_result['Capacity Range'] = label
-            results_by_range[label] = grouped_result
+            results_by_range.append(grouped_result)
 
     # Handle VMware Photon OS separately
     vmware_os_col_candidates = df.columns[df.columns.str.contains("OS according to the VMware Tools", case=False)]
@@ -68,7 +69,7 @@ def process_file(file_path, os_filters, capacity_ranges):
 
 def parallel_process_files(file_paths, os_filters, capacity_ranges):
     """Process files in parallel, returning the combined OS results for all capacity ranges and Photon OS results."""
-    all_results_by_range = {label: [] for _, _, label in capacity_ranges}
+    all_results_by_range = []
     photon_results = []
     unique_os_filters = set()
 
@@ -80,9 +81,7 @@ def parallel_process_files(file_paths, os_filters, capacity_ranges):
                 if results_by_range is None:
                     continue  # Skip the file if there were issues
                 
-                for label, result in results_by_range.items():
-                    if result is not None:
-                        all_results_by_range[label].append(result)
+                all_results_by_range.extend(results_by_range)
 
                 if photon_result is not None and not photon_result.empty:
                     photon_results.append(photon_result)
@@ -93,13 +92,7 @@ def parallel_process_files(file_paths, os_filters, capacity_ranges):
                 print(f"File {future_to_file[future]} generated an exception: {exc}")
 
     # Combine results for each capacity range
-    combined_results_by_range = {}
-    for label, results in all_results_by_range.items():
-        if results:
-            combined_df = pd.concat(results, ignore_index=True)
-            combined_results_by_range[label] = combined_df.groupby(combined_df.columns[0]).sum().reset_index()
-        else:
-            combined_results_by_range[label] = pd.DataFrame(columns=["OS according to the configuration file", "Count", "Capacity Range"])
+    combined_results_by_range = pd.concat(all_results_by_range, ignore_index=True) if all_results_by_range else pd.DataFrame()
 
     # Combine Photon OS results
     if photon_results:
@@ -148,23 +141,11 @@ def main():
     # Process files in parallel and gather OS and Photon OS data
     combined_results_by_range, photon_combined, unique_os_filters = parallel_process_files(file_paths, [], capacity_ranges)
 
-    combined_results = pd.DataFrame()
-    for label, os_summary in combined_results_by_range.items():
-        if not os_summary.empty:  # Ensure to only process non-empty results
-            os_summary['Capacity Range'] = label
-            os_summary_with_sum = insert_break_and_sum(os_summary)
-            combined_results = pd.concat([combined_results, os_summary_with_sum], ignore_index=True)
-
-    # Check if the 'OS according to the configuration file' column exists before summing
-    if 'OS according to the configuration file' in combined_results.columns:
-        # Calculate total sum of all group sums
-        total_machine_count = combined_results[combined_results['OS according to the configuration file'] == 'Disk OS Sum']['Count'].sum()
-
-        # Add a row for the total sum at the end
-        total_row = pd.DataFrame({'OS according to the configuration file': ['Total Machine Count'], 'Count': [total_machine_count], 'Capacity Range': ['']})
-        combined_results = pd.concat([combined_results, total_row], ignore_index=True)
+    # If we have capacity-based results, process them
+    if not combined_results_by_range.empty:
+        combined_results_with_sum = insert_break_and_sum(combined_results_by_range)
     else:
-        print("The column 'OS according to the configuration file' does not exist in the combined results.")
+        combined_results_with_sum = pd.DataFrame()
 
     # Insert sum row for Photon OS if photon_combined is not empty
     if not photon_combined.empty:
@@ -176,11 +157,11 @@ def main():
             'Count': [photon_count],
             'Capacity Range': ['All Capacities']
         })
-        combined_results = pd.concat([combined_results, photon_combined, photon_total_row], ignore_index=True)
+        combined_results_with_sum = pd.concat([combined_results_with_sum, photon_combined, photon_total_row], ignore_index=True)
 
     # Output the combined result to a single CSV file
     output_file = os.path.join(dst_folder, args.name)
-    combined_results.to_csv(output_file, index=False)
+    combined_results_with_sum.to_csv(output_file, index=False)
 
 if __name__ == "__main__":
     main()
