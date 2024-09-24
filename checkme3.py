@@ -202,6 +202,15 @@ def main():
         })
         combined_results = pd.concat([combined_results, photon_combined, photon_total_row], ignore_index=True)
 
+        # Add a blank row after the "Disk OS Sum" of VMware Photon OS to separate the pivot table
+        blank_row_after_photon = pd.DataFrame({
+            'OS according to the configuration file': [''],
+            'Count': [''],
+            'Capacity Range': [''],
+            'OS according to the VMware Tools': ['']
+        })
+        combined_results = pd.concat([combined_results, blank_row_after_photon], ignore_index=True)
+
     # Rearrange columns to switch "OS according to the configuration file" to the first column
     if 'OS according to the configuration file' in combined_results.columns and 'OS according to the VMware Tools' in combined_results.columns:
         columns_order = ['OS according to the configuration file', 'Count', 'Capacity Range', 'OS according to the VMware Tools']
