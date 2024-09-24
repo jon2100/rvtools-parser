@@ -57,34 +57,44 @@ def process_file(file_path, os_filters, capacity_ranges):
             grouped_result['OS according to the configuration file'] = grouped_result[os_col]
             results_by_range.append(grouped_result)
 
-    # Handle VMware Photon OS separately
+    # Handle VMware Photon OS separately, also grouping by capacity range
     vmware_os_col_candidates = df.columns[df.columns.str.contains("OS according to the VMware Tools", case=False)]
-    photon_result = None
+    photon_results_by_range = []
     if not vmware_os_col_candidates.empty:
         vmware_os_col = vmware_os_col_candidates.tolist()[0]
-        photon_result = df[df[vmware_os_col] == "VMware Photon OS (64-bit)"]
+        photon_df = df[df[vmware_os_col] == "VMware Photon OS (64-bit)"]
+        
+        # For Photon OS, also apply capacity range filtering
+        for min_capacity, max_capacity, label in capacity_ranges:
+            photon_filtered_df = photon_df[
+                (photon_df[capacity_col] >= min_capacity) &
+                (photon_df[capacity_col] <= max_capacity)
+            ]
+            if not photon_filtered_df.empty:
+                photon_grouped = photon_filtered_df.groupby(vmware_os_col).size().reset_index(name='Count')
+                photon_grouped['Capacity Range'] = label
+                photon_grouped['OS according to the configuration file'] = 'VMware Photon OS (64-bit)'
+                photon_results_by_range.append(photon_grouped)
 
     # Return the results for all capacity ranges and Photon OS data
-    return results_by_range, photon_result, df[os_col].dropna().unique()
+    return results_by_range, photon_results_by_range, df[os_col].dropna().unique()
 
 def parallel_process_files(file_paths, capacity_ranges):
     """Process files in parallel, returning the combined OS results for all capacity ranges and Photon OS results."""
     all_results_by_range = []
-    photon_results = []
+    all_photon_results_by_range = []
     all_os_filters = set()  # Dynamically collect all unique OS types
 
     with ProcessPoolExecutor() as executor:
         future_to_file = {executor.submit(process_file, file_path, [], capacity_ranges): file_path for file_path in file_paths}
         for future in tqdm(as_completed(future_to_file), total=len(future_to_file), desc="Processing files in parallel"):
             try:
-                results_by_range, photon_result, unique_os = future.result()
+                results_by_range, photon_results_by_range, unique_os = future.result()
                 if results_by_range is None:
                     continue  # Skip the file if there were issues
                 
                 all_results_by_range.extend(results_by_range)
-
-                if photon_result is not None and not photon_result.empty:
-                    photon_results.append(photon_result)
+                all_photon_results_by_range.extend(photon_results_by_range)
 
                 if unique_os is not None:
                     all_os_filters.update(unique_os)
@@ -94,16 +104,10 @@ def parallel_process_files(file_paths, capacity_ranges):
     # Combine results for each capacity range
     combined_results_by_range = pd.concat(all_results_by_range, ignore_index=True) if all_results_by_range else pd.DataFrame()
 
-    # Combine Photon OS results
-    if photon_results:
-        photon_combined_df = pd.concat(photon_results, ignore_index=True)
-        photon_summary = photon_combined_df.groupby("OS according to the VMware Tools").size().reset_index(name='Count')
-        photon_summary['Capacity Range'] = 'All Capacities'
-        photon_summary['OS according to the configuration file'] = 'VMware Photon OS (64-bit)'
-    else:
-        photon_summary = pd.DataFrame(columns=["OS according to the VMware Tools", "Count", "Capacity Range", "OS according to the configuration file"])
+    # Combine Photon OS results for each capacity range
+    photon_combined_results_by_range = pd.concat(all_photon_results_by_range, ignore_index=True) if all_photon_results_by_range else pd.DataFrame()
 
-    return combined_results_by_range, photon_summary, all_os_filters
+    return combined_results_by_range, photon_combined_results_by_range, all_os_filters
 
 def insert_break_and_sum(df):
     # For each capacity range, group the results by OS, sum the counts, and add a "Disk OS Sum" row
@@ -181,18 +185,19 @@ def main():
 
     # Define capacity ranges
     capacity_ranges = [
+        (0, 149, '0 MB - 149 MB'),
         (150, 2000000, '150 MB - 2 TB'),
         (2000001, 10000000, '2 TB - 10 TB'),
         (10000001, 20000000, '10 TB - 20 TB'),
         (20000001, 40000000, '20 TB - 40 TB'),
-        (0, 149, '0 MB - 149 MB'),
+        
     ]
 
     # Create destination folder if it doesn't exist
     os.makedirs(dst_folder, exist_ok=True)
 
     # Process files in parallel and gather OS and Photon OS data
-    combined_results_by_range, photon_combined, unique_os_filters = parallel_process_files(file_paths, capacity_ranges)
+    combined_results_by_range, photon_combined_by_range, unique_os_filters = parallel_process_files(file_paths, capacity_ranges)
 
     # If we have capacity-based results, process them and add sum rows for each capacity range
     if not combined_results_by_range.empty:
@@ -201,24 +206,10 @@ def main():
     else:
         combined_results_with_total = pd.DataFrame()
 
-    # Insert sum row for Photon OS if photon_combined is not empty
-    if not photon_combined.empty:
-        photon_combined['Capacity Range'] = 'All Capacities'
-        photon_combined['OS according to the configuration file'] = 'VMware Photon OS (64-bit)'
-        photon_count = photon_combined['Count'].sum()
-        photon_total_row = pd.DataFrame({
-            'OS according to the configuration file': ['Disk OS Sum'],
-            'Count': [photon_count],
-            'Capacity Range': ['All Capacities'],
-            'OS according to the VMware Tools': ['']
-        })
-        blank_row = pd.DataFrame({
-            'OS according to the configuration file': [''],
-            'Count': [''],
-            'Capacity Range': [''],
-            'OS according to the VMware Tools': ['']
-        })
-        combined_results_with_total = pd.concat([combined_results_with_total, photon_combined, photon_total_row, blank_row], ignore_index=True)
+    # Insert sum row for Photon OS by capacity range if photon_combined_by_range is not empty
+    if not photon_combined_by_range.empty:
+        photon_combined_with_sum = insert_break_and_sum(photon_combined_by_range)
+        combined_results_with_total = pd.concat([combined_results_with_total, photon_combined_with_sum], ignore_index=True)
 
     # Rearrange columns to have 'OS according to the configuration file' as the first column
     column_order = ['OS according to the configuration file', 'Count', 'Capacity Range', 'OS according to the VMware Tools']
