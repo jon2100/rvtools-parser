@@ -105,11 +105,19 @@ def parallel_process_files(file_paths, capacity_ranges):
     return combined_results_by_range, photon_summary, all_os_filters
 
 def insert_break_and_sum(df):
-    if not df.empty:
-        total_count = df['Count'].sum()
-        break_df = pd.DataFrame({'OS according to the configuration file': ['Disk OS Sum', ''], 'Count': [total_count, ''], 'Capacity Range': ['', '']})
-        return pd.concat([df, break_df], ignore_index=True)
-    return df
+    # For each capacity range, add a "Disk OS Sum" row
+    df_with_sums = pd.DataFrame()
+    for label in df['Capacity Range'].unique():
+        grouped_df = df[df['Capacity Range'] == label]
+        total_count = grouped_df['Count'].sum()
+        break_df = pd.DataFrame({
+            'OS according to the configuration file': ['Disk OS Sum'],
+            'Count': [total_count],
+            'Capacity Range': [label]
+        })
+        df_with_sums = pd.concat([df_with_sums, grouped_df, break_df], ignore_index=True)
+    
+    return df_with_sums
 
 def main():
     parser = argparse.ArgumentParser(description="Process Excel files and generate OS disk capacity reports.")
@@ -143,7 +151,7 @@ def main():
     # Process files in parallel and gather OS and Photon OS data
     combined_results_by_range, photon_combined, unique_os_filters = parallel_process_files(file_paths, capacity_ranges)
 
-    # If we have capacity-based results, process them
+    # If we have capacity-based results, process them and add sum rows for each capacity range
     if not combined_results_by_range.empty:
         combined_results_with_sum = insert_break_and_sum(combined_results_by_range)
     else:
