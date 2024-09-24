@@ -111,6 +111,25 @@ def insert_break_and_sum(df):
     break_df = pd.DataFrame({'OS according to the configuration file': ['Disk OS Sum', ''], 'Count': [total_count, ''], 'Capacity Range': ['', '']})
     return pd.concat([df, break_df], ignore_index=True)
 
+def create_pivot_table(df):
+    """Create a pivot table showing OS Disk Sum as a percentage of the total."""
+    # Exclude "Total Machine Count" and "VMware Photon OS"
+    filtered_df = df[~df['OS according to the configuration file'].isin(['Total Machine Count', 'VMware Photon OS (64-bit)'])]
+    
+    # Filter only Disk OS Sum rows
+    disk_os_sum_df = filtered_df[filtered_df['OS according to the configuration file'] == 'Disk OS Sum']
+    
+    # Calculate the total of all "Disk OS Sum" values (excluding Photon OS and Total Machine Count)
+    total_disk_os_sum = disk_os_sum_df['Count'].sum()
+
+    # Calculate percentage for each Disk OS Sum
+    disk_os_sum_df['Percentage'] = (disk_os_sum_df['Count'] / total_disk_os_sum) * 100
+    
+    # Create a pivot table with Capacity Range and percentage of Disk OS Sum
+    pivot_table = disk_os_sum_df[['Capacity Range', 'Count', 'Percentage']]
+    
+    return pivot_table
+
 def main():
     parser = argparse.ArgumentParser(description="Process Excel files and generate OS disk capacity reports.")
     
@@ -188,11 +207,25 @@ def main():
         columns_order = ['OS according to the configuration file', 'Count', 'Capacity Range', 'OS according to the VMware Tools']
         combined_results = combined_results[columns_order]
 
-    # Output the combined result to a single CSV file
+    # Create the pivot table
+    pivot_table = create_pivot_table(combined_results)
+
+    # Add a label row for clarity
+    label_row = pd.DataFrame({
+        'OS according to the configuration file': ['Pivot Table - OS Disk Sum Percentage'],
+        'Count': [''],
+        'Capacity Range': [''],
+        'OS according to the VMware Tools': ['']
+    })
+
+    # Append the pivot table to the combined results
+    combined_results = pd.concat([combined_results, label_row, pivot_table], ignore_index=True)
+
+    # Output the combined result (with pivot table) to a single CSV file
     output_file = os.path.join(dst_folder, args.name)
     combined_results.to_csv(output_file, index=False)
 
-    print(f"Combined results including VMware Photon OS saved to {output_file}")
+    print(f"Combined results including VMware Photon OS and pivot table saved to {output_file}")
 
 if __name__ == "__main__":
     main()
