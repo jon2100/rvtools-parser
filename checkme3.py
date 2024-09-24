@@ -3,29 +3,28 @@
 import pandas as pd
 import os
 import argparse
-from tqdm import tqdm  # Import the tqdm progress bar
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from tqdm import tqdm
 
 # Conversion factor for MiB to MB
 MIB_TO_MB = 1.048576
 
-def process_file(file_path, os_filters, min_capacity, max_capacity):
-    """Process a single Excel file and return both OS counts and VMware Photon OS counts."""
+def process_file(file_path, os_filters, capacity_ranges):
+    """Process a single Excel file and return OS counts for all capacity ranges and VMware Photon OS counts."""
     df = pd.read_excel(file_path)
     
     # Find the OS column and check if it exists
     os_col_candidates = df.columns[df.columns.str.contains("OS according to the configuration file", case=False)]
-    
     if os_col_candidates.empty:
-        return None, None
-    
+        return None, None, None
+
     os_col = os_col_candidates.tolist()[0]  # Use the first matching column
 
-    # Try to find the column for capacity (MiB) in a flexible way
-    capacity_col_candidates = df.columns[df.columns.str.contains("Total disk capacity MiB|Total disk capacity MB", case=False, regex=True)]
-    
+    # Try to find the column for capacity (MiB or MB)
+    capacity_col_candidates = df.columns[df.columns.str.contains(r"Total.*disk.*capacity.*(MiB|MB)", case=False, regex=True)]
     if capacity_col_candidates.empty:
-        return None, None
-    
+        return None, None, None
+
     capacity_col = capacity_col_candidates.tolist()[0]  # Use the first matching column
 
     # Filter out rows that contain 'Template', 'SRM Placeholder', or 'AdditionalBackEnd'
@@ -34,16 +33,9 @@ def process_file(file_path, os_filters, min_capacity, max_capacity):
 
     df = df[~df[os_col].astype(str).str.contains('Template|SRM Placeholder|AdditionalBackEnd', case=False, na=False)]
 
-    # Convert MiB to MB (if necessary) by checking if the capacity column has 'MiB' in its name
+    # Convert MiB to MB (if necessary)
     if "MiB" in capacity_col:
-        df[capacity_col] = df[capacity_col] * MIB_TO_MB  # Convert MiB to MB
-
-    # Filter by capacity range and OS filters
-    filtered_df = df[
-        (df[capacity_col] >= min_capacity) &
-        (df[capacity_col] <= max_capacity) &
-        (df[os_col].isin(os_filters))
-    ]
+        df[capacity_col] = df[capacity_col] * MIB_TO_MB
 
     # Handle VMware Photon OS at the same time
     vmware_os_col_candidates = df.columns[df.columns.str.contains("OS according to the VMware Tools", case=False)]
@@ -52,32 +44,52 @@ def process_file(file_path, os_filters, min_capacity, max_capacity):
         vmware_os_col = vmware_os_col_candidates.tolist()[0]
         photon_result = df[df[vmware_os_col] == "VMware Photon OS (64-bit)"]
 
-    # Check if the filtered dataframe is empty; if so, return None
-    if filtered_df.empty:
-        return None, photon_result
+    # Prepare results for each capacity range
+    results_by_range = {}
+    for min_capacity, max_capacity, label in capacity_ranges:
+        filtered_df = df[
+            (df[capacity_col] >= min_capacity) &
+            (df[capacity_col] <= max_capacity) &
+            (df[os_col].isin(os_filters))
+        ]
+        if not filtered_df.empty:
+            grouped_result = filtered_df.groupby(os_col).size().reset_index(name='Count')
+            results_by_range[label] = grouped_result
 
-    # Group the results by OS
-    grouped_result = filtered_df.groupby(os_col).size().reset_index(name='Count')
-    
-    return grouped_result, photon_result
+    # Return the results for all capacity ranges and Photon OS data
+    return results_by_range, photon_result, df[os_col].dropna().unique()
 
-def count_os_and_photon(file_paths, os_filters, min_capacity, max_capacity):
-    results = []
+def parallel_process_files(file_paths, os_filters, capacity_ranges):
+    """Process files in parallel, returning the combined OS results for all capacity ranges and Photon OS results."""
+    all_results_by_range = {label: [] for _, _, label in capacity_ranges}
     photon_results = []
-    # Process each file only once and gather both OS counts and Photon OS data
-    for file_path in tqdm(file_paths, desc="Processing files"):
-        os_result, photon_result = process_file(file_path, os_filters, min_capacity, max_capacity)
-        if os_result is not None:
-            results.append(os_result)  # Only append if the result is not None (i.e., data exists)
-        if photon_result is not None and not photon_result.empty:
-            photon_results.append(photon_result)
+    unique_os_filters = set()
 
-    # Combine OS results
-    if results:
-        combined_df = pd.concat(results, ignore_index=True)
-        os_summary = combined_df.groupby(combined_df.columns[0]).sum().reset_index()
-    else:
-        os_summary = pd.DataFrame(columns=["OS according to the configuration file", "Count"])
+    with ProcessPoolExecutor() as executor:
+        future_to_file = {executor.submit(process_file, file_path, os_filters, capacity_ranges): file_path for file_path in file_paths}
+        for future in tqdm(as_completed(future_to_file), total=len(future_to_file), desc="Processing files in parallel"):
+            try:
+                results_by_range, photon_result, unique_os = future.result()
+                for label, result in results_by_range.items():
+                    if result is not None:
+                        all_results_by_range[label].append(result)
+
+                if photon_result is not None and not photon_result.empty:
+                    photon_results.append(photon_result)
+
+                if unique_os is not None:
+                    unique_os_filters.update(unique_os)
+            except Exception as exc:
+                print(f"File {future_to_file[future]} generated an exception: {exc}")
+
+    # Combine results for each capacity range
+    combined_results_by_range = {}
+    for label, results in all_results_by_range.items():
+        if results:
+            combined_df = pd.concat(results, ignore_index=True)
+            combined_results_by_range[label] = combined_df.groupby(combined_df.columns[0]).sum().reset_index()
+        else:
+            combined_results_by_range[label] = pd.DataFrame(columns=["OS according to the configuration file", "Count"])
 
     # Combine Photon OS results
     if photon_results:
@@ -85,8 +97,8 @@ def count_os_and_photon(file_paths, os_filters, min_capacity, max_capacity):
         photon_summary = photon_combined_df.groupby("OS according to the VMware Tools").size().reset_index(name='Count')
     else:
         photon_summary = pd.DataFrame(columns=["OS according to the VMware Tools", "Count"])
-    
-    return os_summary, photon_summary
+
+    return combined_results_by_range, photon_summary, unique_os_filters
 
 def insert_break_and_sum(df):
     total_count = df['Count'].sum()
@@ -110,15 +122,6 @@ def main():
     # Get the list of Excel files from the source folder
     file_paths = [os.path.join(src_folder, f) for f in os.listdir(src_folder) if f.endswith('.xlsx')]
 
-    # Dynamically load unique OS filters from the Excel files
-    os_filters = set()
-    for file_path in file_paths:
-        df = pd.read_excel(file_path)
-        os_col_candidates = df.columns[df.columns.str.contains("OS according to the configuration file", case=False)].tolist()
-        if os_col_candidates:
-            os_filters.update(df[os_col_candidates[0]].dropna().unique())
-    os_filters = list(os_filters)
-
     # Define capacity ranges
     capacity_ranges = [
         (150, 2000000, '150 MB - 2 TB'),
@@ -131,18 +134,15 @@ def main():
     # Create destination folder if it doesn't exist
     os.makedirs(dst_folder, exist_ok=True)
 
-    # Process each capacity range in a single pass, gathering OS and Photon OS data
+    # Process files in parallel and gather OS and Photon OS data
+    combined_results_by_range, photon_combined, unique_os_filters = parallel_process_files(file_paths, [], capacity_ranges)
+
     combined_results = pd.DataFrame()
-    photon_combined = pd.DataFrame()
-    for min_capacity, max_capacity, label in capacity_ranges:
-        os_summary, photon_summary = count_os_and_photon(file_paths, os_filters, min_capacity, max_capacity)
+    for label, os_summary in combined_results_by_range.items():
         if not os_summary.empty:  # Ensure to only process non-empty results
             os_summary['Capacity Range'] = label
             os_summary_with_sum = insert_break_and_sum(os_summary)
             combined_results = pd.concat([combined_results, os_summary_with_sum], ignore_index=True)
-
-        if not photon_summary.empty:
-            photon_combined = pd.concat([photon_combined, photon_summary], ignore_index=True)
 
     # Calculate total sum of all group sums
     total_machine_count = combined_results[combined_results['OS according to the configuration file'] == 'Disk OS Sum']['Count'].sum()
