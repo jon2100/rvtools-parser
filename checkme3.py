@@ -183,14 +183,13 @@ def main():
     # Get the list of Excel files from the source folder
     file_paths = [os.path.join(src_folder, f) for f in os.listdir(src_folder) if f.endswith('.xlsx')]
 
-    # Define capacity ranges
+    # Define capacity ranges, with "0 MB - 149 MB" appearing first
     capacity_ranges = [
         (0, 149, '0 MB - 149 MB'),
         (150, 2000000, '150 MB - 2 TB'),
         (2000001, 10000000, '2 TB - 10 TB'),
         (10000001, 20000000, '10 TB - 20 TB'),
-        (20000001, 40000000, '20 TB - 40 TB'),
-        
+        (20000001, 40000000, '20 TB - 40 TB')
     ]
 
     # Create destination folder if it doesn't exist
