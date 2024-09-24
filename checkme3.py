@@ -21,7 +21,7 @@ def process_file(file_path, os_filters, capacity_ranges):
     os_col = os_col_candidates.tolist()[0]  # Use the first matching column
 
     # Try to find the column for capacity (MiB or MB)
-    capacity_col_candidates = df.columns[df.columns.str.contains(r"Total.*disk.*capacity.*(MiB|MB)", case=False, regex=True)]
+    capacity_col_candidates = df.columns[df.columns.str.contains("Total disk capacity MiB|Total disk capacity MB", case=False, regex=True)]
     if capacity_col_candidates.empty:
         return None, None, None
 
