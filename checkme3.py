@@ -107,14 +107,21 @@ def parallel_process_files(file_paths, capacity_ranges):
 def insert_break_and_sum(df):
     # For each capacity range, add a "Disk OS Sum" row
     df_with_sums = pd.DataFrame()
+    
+    # Group by capacity range and add a sum row after each group
     for label in df['Capacity Range'].unique():
-        grouped_df = df[df['Capacity Range'] == label]
+        grouped_df = df[df['Capacity Range'] == label].copy()
         total_count = grouped_df['Count'].sum()
+        
+        # Add sum row for this capacity range
         break_df = pd.DataFrame({
             'OS according to the configuration file': ['Disk OS Sum'],
             'Count': [total_count],
-            'Capacity Range': [label]
+            'Capacity Range': [label],
+            'OS according to the VMware Tools': ['']
         })
+        
+        # Concatenate the results for this capacity range, followed by the sum row
         df_with_sums = pd.concat([df_with_sums, grouped_df, break_df], ignore_index=True)
     
     return df_with_sums
@@ -165,7 +172,8 @@ def main():
         photon_total_row = pd.DataFrame({
             'OS according to the configuration file': ['Disk OS Sum'],
             'Count': [photon_count],
-            'Capacity Range': ['All Capacities']
+            'Capacity Range': ['All Capacities'],
+            'OS according to the VMware Tools': ['']
         })
         combined_results_with_sum = pd.concat([combined_results_with_sum, photon_combined, photon_total_row], ignore_index=True)
 
