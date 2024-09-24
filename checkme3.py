@@ -67,8 +67,8 @@ def process_file(file_path, os_filters, capacity_ranges):
         # For Photon OS, also apply capacity range filtering
         for min_capacity, max_capacity, label in capacity_ranges:
             photon_filtered_df = photon_df[
-                (photon_df[capacity_col] >= min_capacity) &
-                (photon_df[capacity_col] <= max_capacity)
+                (photon_filtered_df[capacity_col] >= min_capacity) &
+                (photon_filtered_df[capacity_col] <= max_capacity)
             ]
             if not photon_filtered_df.empty:
                 photon_grouped = photon_filtered_df.groupby(vmware_os_col).size().reset_index(name='Count')
@@ -179,6 +179,9 @@ def main():
     # Resolve paths to absolute paths
     src_folder = os.path.abspath(args.source)
     dst_folder = os.path.abspath(args.destination)
+
+    # Get the list of Excel files from the source folder
+    file_paths = [os.path.join(src_folder, f) for f in os.listdir(src_folder) if f.endswith('.xlsx')]
 
     # Define capacity ranges, with "0 MB - 149 MB" appearing first
     capacity_ranges = [
