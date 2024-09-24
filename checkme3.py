@@ -48,12 +48,12 @@ def process_file(file_path, os_filters, capacity_ranges):
     for min_capacity, max_capacity, label in capacity_ranges:
         filtered_df = df[
             (df[capacity_col] >= min_capacity) &
-            (df[capacity_col] <= max_capacity) &
-            (df[os_col].isin(os_filters))
+            (df[capacity_col] <= max_capacity)
         ]
         if not filtered_df.empty:
             grouped_result = filtered_df.groupby(os_col).size().reset_index(name='Count')
             grouped_result['Capacity Range'] = label
+            grouped_result['OS according to the configuration file'] = grouped_result[os_col]
             results_by_range.append(grouped_result)
 
     # Handle VMware Photon OS separately
@@ -66,14 +66,14 @@ def process_file(file_path, os_filters, capacity_ranges):
     # Return the results for all capacity ranges and Photon OS data
     return results_by_range, photon_result, df[os_col].dropna().unique()
 
-def parallel_process_files(file_paths, os_filters, capacity_ranges):
+def parallel_process_files(file_paths, capacity_ranges):
     """Process files in parallel, returning the combined OS results for all capacity ranges and Photon OS results."""
     all_results_by_range = []
     photon_results = []
-    unique_os_filters = set()
+    all_os_filters = set()  # Dynamically collect all unique OS types
 
     with ProcessPoolExecutor() as executor:
-        future_to_file = {executor.submit(process_file, file_path, os_filters, capacity_ranges): file_path for file_path in file_paths}
+        future_to_file = {executor.submit(process_file, file_path, [], capacity_ranges): file_path for file_path in file_paths}
         for future in tqdm(as_completed(future_to_file), total=len(future_to_file), desc="Processing files in parallel"):
             try:
                 results_by_range, photon_result, unique_os = future.result()
@@ -86,7 +86,7 @@ def parallel_process_files(file_paths, os_filters, capacity_ranges):
                     photon_results.append(photon_result)
 
                 if unique_os is not None:
-                    unique_os_filters.update(unique_os)
+                    all_os_filters.update(unique_os)
             except Exception as exc:
                 print(f"File {future_to_file[future]} generated an exception: {exc}")
 
@@ -98,15 +98,18 @@ def parallel_process_files(file_paths, os_filters, capacity_ranges):
         photon_combined_df = pd.concat(photon_results, ignore_index=True)
         photon_summary = photon_combined_df.groupby("OS according to the VMware Tools").size().reset_index(name='Count')
         photon_summary['Capacity Range'] = 'All Capacities'
+        photon_summary['OS according to the configuration file'] = 'VMware Photon OS (64-bit)'
     else:
-        photon_summary = pd.DataFrame(columns=["OS according to the VMware Tools", "Count", "Capacity Range"])
+        photon_summary = pd.DataFrame(columns=["OS according to the VMware Tools", "Count", "Capacity Range", "OS according to the configuration file"])
 
-    return combined_results_by_range, photon_summary, unique_os_filters
+    return combined_results_by_range, photon_summary, all_os_filters
 
 def insert_break_and_sum(df):
-    total_count = df['Count'].sum()
-    break_df = pd.DataFrame({'OS according to the configuration file': ['Disk OS Sum', ''], 'Count': [total_count, ''], 'Capacity Range': ['', '']})
-    return pd.concat([df, break_df], ignore_index=True)
+    if not df.empty:
+        total_count = df['Count'].sum()
+        break_df = pd.DataFrame({'OS according to the configuration file': ['Disk OS Sum', ''], 'Count': [total_count, ''], 'Capacity Range': ['', '']})
+        return pd.concat([df, break_df], ignore_index=True)
+    return df
 
 def main():
     parser = argparse.ArgumentParser(description="Process Excel files and generate OS disk capacity reports.")
@@ -138,7 +141,7 @@ def main():
     os.makedirs(dst_folder, exist_ok=True)
 
     # Process files in parallel and gather OS and Photon OS data
-    combined_results_by_range, photon_combined, unique_os_filters = parallel_process_files(file_paths, [], capacity_ranges)
+    combined_results_by_range, photon_combined, unique_os_filters = parallel_process_files(file_paths, capacity_ranges)
 
     # If we have capacity-based results, process them
     if not combined_results_by_range.empty:
@@ -158,9 +161,18 @@ def main():
         })
         combined_results_with_sum = pd.concat([combined_results_with_sum, photon_combined, photon_total_row], ignore_index=True)
 
+    # Rearrange columns to have 'OS according to the configuration file' as the first column
+    column_order = ['OS according to the configuration file', 'Count', 'Capacity Range', 'OS according to the VMware Tools']
+    combined_results_with_sum = combined_results_with_sum[column_order]
+
     # Output the combined result to a single CSV file
     output_file = os.path.join(dst_folder, args.name)
     combined_results_with_sum.to_csv(output_file, index=False)
+
+    # Debug: Print the columns of the resulting DataFrame to confirm structure
+    print(f"Output file: {output_file}")
+    print("Columns in final result:", combined_results_with_sum.columns.tolist())
+    print(f"Unique OS Filters used: {list(unique_os_filters)}")  # Debugging OS Filters
 
 if __name__ == "__main__":
     main()
