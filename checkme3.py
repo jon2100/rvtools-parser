@@ -142,7 +142,7 @@ def insert_break_and_sum(df):
     return df_with_sums
 
 def insert_total_machine_count(df):
-    """Inserts a row for 'Total Machine Count' before the Photon OS block."""
+    """Inserts a row for 'Total Machine Count' before the Photon OS block, followed by a blank row."""
     total_machine_count = df[df['OS according to the configuration file'] == 'Disk OS Sum']['Count'].sum()
 
     total_row = pd.DataFrame({
@@ -152,7 +152,15 @@ def insert_total_machine_count(df):
         'OS according to the VMware Tools': ['']
     })
 
-    return pd.concat([df, total_row], ignore_index=True)
+    # Insert a blank row after the 'Total Machine Count' row
+    blank_row = pd.DataFrame({
+        'OS according to the configuration file': [''],
+        'Count': [''],
+        'Capacity Range': [''],
+        'OS according to the VMware Tools': ['']
+    })
+
+    return pd.concat([df, total_row, blank_row], ignore_index=True)
 
 def main():
     parser = argparse.ArgumentParser(description="Process Excel files and generate OS disk capacity reports.")
