@@ -8,7 +8,6 @@ from openpyxl.chart import PieChart, Reference
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.chart.label import DataLabelList
-from openpyxl.worksheet.table import Table, TableStyleInfo
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from openpyxl import load_workbook
@@ -159,15 +158,13 @@ def main():
     parser.add_argument('-s', '--src', default='./data', help='Source folder containing Excel files (default: ./data)')
     parser.add_argument('-d', '--dst', default='./output', help='Destination folder for the output file (default: ./output)')
     parser.add_argument('-n', '--name', default='output', help="Base name of the output file without extension (default: output)")
-    parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='Displays this help')
 
     args = parser.parse_args()
 
     src_folder = os.path.abspath(args.src)
     dst_folder = os.path.abspath(args.dst)
+    file_extension = ".xlsx"
     output_file = os.path.join(dst_folder, f"{args.name}{file_extension}")
-    # Example usage in the terminal:
-    # python3 disk-groupby-capacity.py -s /path/to/source -d /path/to/destination -n os_report
 
     # Get all Excel files in the source directory
     file_paths = [os.path.join(src_folder, f) for f in os.listdir(src_folder) if f.endswith('.xlsx')]
@@ -184,51 +181,20 @@ def main():
 
     combined_results_by_range, photon_combined, unique_os_filters = parallel_process_files(file_paths, capacity_ranges)
 
-    if file_extension == '.xlsx':
-        wb = Workbook()
-        ws = wb.active
+    wb = Workbook()
+    ws = wb.active
 
-        for i, (label, df) in enumerate(combined_results_by_range.items()):
-            df = insert_break_and_sum(df)
-            create_pie_chart(wb, df, label)
+    for i, (label, df) in enumerate(combined_results_by_range.items()):
+        df = insert_break_and_sum(df)
+        create_pie_chart(wb, df, label)
 
-        ws = wb.create_sheet("VMware Photon OS")
-        ws.append(["OS according to the VMware Tools", "Count"])
-        for r in dataframe_to_rows(photon_combined, index=False, header=True):
-            ws.append(r)
-        create_pie_chart(wb, photon_combined, "VMware Photon OS")
+    ws = wb.create_sheet("VMware Photon OS")
+    ws.append(["OS according to the VMware Tools", "Count"])
+    for r in dataframe_to_rows(photon_combined, index=False, header=True):
+        ws.append(r)
+    create_pie_chart(wb, photon_combined, "VMware Photon OS")
 
-        wb.save(output_file)
-    else:
-        with open(output_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            for label, df in combined_results_by_range.items():
-                df = insert_break_and_sum(df)
-                writer.writerow([label])
-                writer.writerow(["OS according to the configuration file", "Count"])
-                writer.writerows(df.values.tolist())
-                writer.writerow([])
-
-    # Insert sum row for Photon OS if photon_combined is not empty
-    if not photon_combined.empty:
-        photon_combined['Capacity Range'] = 'All Capacities'
-        photon_combined['OS according to the configuration file'] = 'VMware Photon OS (64-bit)'
-        photon_count = photon_combined['Count'].sum()
-        photon_total_row = pd.DataFrame({
-            'OS according to the configuration file': ['Disk OS Sum'],
-            'Count': [photon_count],
-            'Capacity Range': ['All Capacities']
-        })
-        combined_results = pd.concat([combined_results, photon_combined, photon_total_row], ignore_index=True)
-
-    # Rearrange columns to switch "OS according to the configuration file" to the first column
-    if 'OS according to the configuration file' in combined_results.columns and 'OS according to the VMware Tools' in combined_results.columns:
-        columns_order = ['OS according to the configuration file', 'Count', 'Capacity Range', 'OS according to the VMware Tools']
-        combined_results = combined_results[columns_order]
-
-    # Output the combined result to a single Excel file using the openpyxl engine
-    output_file = os.path.join(dst_folder, f"{args.name}.xlsx")
-    combined_results.to_excel(output_file, index=False, engine='openpyxl')
+    wb.save(output_file)
 
     # Load the file and set column widths
     workbook = load_workbook(output_file)
@@ -237,9 +203,6 @@ def main():
     workbook.save(output_file)
 
     print(f"Combined results including VMware Photon OS saved to {output_file}")
-            writer.writerow(["VMware Photon OS"])
-            writer.writerow(["OS according to the VMware Tools", "Count"])
-            writer.writerows(photon_combined.values.tolist())
 
 if __name__ == "__main__":
     main()
