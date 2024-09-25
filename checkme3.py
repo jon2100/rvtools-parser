@@ -188,10 +188,10 @@ def main():
         columns_order = ['OS according to the configuration file', 'Count', 'Capacity Range', 'OS according to the VMware Tools']
         combined_results = combined_results[columns_order]
 
-    # Output the combined result to a single CSV file
-    output_file = os.path.join(dst_folder, args.name)
-    combined_results.to_csv(output_file, index=False)
-
+    # Output the combined result to a single Excel file using the openpyxl engine
+    output_file = os.path.join(dst_folder, f"{args.name}.xlsx")
+    combined_results.to_excel(output_file, index=False, engine='openpyxl')
+    
     print(f"Combined results including VMware Photon OS saved to {output_file}")
 
 if __name__ == "__main__":
