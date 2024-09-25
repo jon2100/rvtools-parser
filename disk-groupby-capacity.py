@@ -5,6 +5,7 @@ import os
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
+from openpyxl import load_workbook
 
 # Conversion factor for MiB to MB
 MIB_TO_MB = 1.048576
@@ -111,13 +112,26 @@ def insert_break_and_sum(df):
     break_df = pd.DataFrame({'OS according to the configuration file': ['Disk OS Sum', ''], 'Count': [total_count, ''], 'Capacity Range': ['', '']})
     return pd.concat([df, break_df], ignore_index=True)
 
+def set_column_widths(sheet):
+    """Set the width of the columns to fit the header length."""
+    for col in sheet.columns:
+        max_length = 0
+        col_letter = col[0].column_letter  # Get the column letter
+        for cell in col:
+            try:  # Get the max length of the column values and header
+                max_length = max(len(str(cell.value)), max_length)
+            except:
+                pass
+        adjusted_width = max_length + 2  # Add some padding for better readability
+        sheet.column_dimensions[col_letter].width = adjusted_width
+
 def main():
     parser = argparse.ArgumentParser(description="Process Excel files and generate OS disk capacity reports.")
     
     # Optional command-line arguments
     parser.add_argument('-src', '--source', default='./data', help='Source folder containing Excel files (default: ./data)')
-    parser.add_argument('-dst', '--destination', default='./output', help='Destination folder for the output CSV file (default: ./output)')
-    parser.add_argument('-name', '--name', default='output.csv', help='Name of the output CSV file (default: output.csv)')
+    parser.add_argument('-dst', '--destination', default='./output', help='Destination folder for the output Excel file (default: ./output)')
+    parser.add_argument('-name', '--name', default='output', help='Name of the output Excel file without extension (default: output)')
 
     args = parser.parse_args()
 
@@ -191,7 +205,13 @@ def main():
     # Output the combined result to a single Excel file using the openpyxl engine
     output_file = os.path.join(dst_folder, f"{args.name}.xlsx")
     combined_results.to_excel(output_file, index=False, engine='openpyxl')
-    
+
+    # Load the file and set column widths
+    workbook = load_workbook(output_file)
+    sheet = workbook.active
+    set_column_widths(sheet)
+    workbook.save(output_file)
+
     print(f"Combined results including VMware Photon OS saved to {output_file}")
 
 if __name__ == "__main__":
