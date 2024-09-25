@@ -61,7 +61,7 @@ The output file will contain the following columns:
 ```markdown
 | OS according to the configuration file | Count | Capacity Range    | OS according to the VMware Tools |
 |----------------------------------------|-------|-------------------|----------------------------------|
-| Microsoft Windows Server 2016 (64-bit) |	10	 |  150 MB - 2 TB	 |                                  |
+| Microsoft Windows Server 2016 (64-bit) |10	 |  150 MB - 2 TB	 |                                  |
 |----------------------------------------|-------|-------------------|----------------------------------|
 |----------------------------------------|-------|-------------------|----------------------------------|
 |Disk OS Sum	                         |  10	 |	                 |                                  |
