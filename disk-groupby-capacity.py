@@ -3,15 +3,8 @@
 import pandas as pd
 import os
 import argparse
-import openpyxl
-from openpyxl.chart import PieChart, Reference
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.chart.label import DataLabelList
-from openpyxl.worksheet.table import Table, TableStyleInfo
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
-from openpyxl import load_workbook
 
 # Conversion factor for MiB to MB
 MIB_TO_MB = 1.048576
@@ -20,32 +13,38 @@ def process_file(file_path, os_filters, capacity_ranges):
     """Process a single Excel file and return OS counts for all capacity ranges and VMware Photon OS counts."""
     df = pd.read_excel(file_path)
     
+    # Find the OS column and check if it exists
     os_col_candidates = df.columns[df.columns.str.contains("OS according to the configuration file", case=False)]
     if os_col_candidates.empty:
         return None, None, None
 
-    os_col = os_col_candidates.tolist()[0]
+    os_col = os_col_candidates.tolist()[0]  # Use the first matching column
 
+    # Try to find the column for capacity (MiB or MB)
     capacity_col_candidates = df.columns[df.columns.str.contains("Total disk capacity MiB|Total disk capacity MB", case=False, regex=True)]
     if capacity_col_candidates.empty:
         return None, None, None
 
-    capacity_col = capacity_col_candidates.tolist()[0]
+    capacity_col = capacity_col_candidates.tolist()[0]  # Use the first matching column
 
+    # Filter out rows that contain 'Template', 'SRM Placeholder', or 'AdditionalBackEnd'
     if 'Template' in df.columns and 'SRM Placeholder' in df.columns:
         df = df[(df['Template'] != True) & (df['SRM Placeholder'] != True)]
 
     df = df[~df[os_col].astype(str).str.contains('Template|SRM Placeholder|AdditionalBackEnd', case=False, na=False)]
 
+    # Convert MiB to MB (if necessary)
     if "MiB" in capacity_col:
         df[capacity_col] = df[capacity_col] * MIB_TO_MB
 
+    # Handle VMware Photon OS at the same time
     vmware_os_col_candidates = df.columns[df.columns.str.contains("OS according to the VMware Tools", case=False)]
     photon_result = None
     if not vmware_os_col_candidates.empty:
         vmware_os_col = vmware_os_col_candidates.tolist()[0]
         photon_result = df[df[vmware_os_col] == "VMware Photon OS (64-bit)"]
 
+    # Prepare results for each capacity range
     results_by_range = {}
     for min_capacity, max_capacity, label in capacity_ranges:
         filtered_df = df[
@@ -58,6 +57,7 @@ def process_file(file_path, os_filters, capacity_ranges):
             grouped_result['OS according to the configuration file'] = grouped_result[os_col]
             results_by_range[label] = grouped_result
 
+    # Return the results for all capacity ranges and Photon OS data
     return results_by_range, photon_result, df[os_col].dropna().unique()
 
 def parallel_process_files(file_paths, capacity_ranges):
@@ -83,6 +83,7 @@ def parallel_process_files(file_paths, capacity_ranges):
             except Exception as exc:
                 print(f"File {future_to_file[future]} generated an exception: {exc}")
 
+    # Combine results for each capacity range
     combined_results_by_range = {}
     for label, results in all_results_by_range.items():
         if results:
@@ -91,6 +92,7 @@ def parallel_process_files(file_paths, capacity_ranges):
         else:
             combined_results_by_range[label] = pd.DataFrame(columns=["OS according to the configuration file", "Count"])
 
+    # Combine Photon OS results
     if photon_results:
         photon_combined_df = pd.concat(photon_results, ignore_index=True)
         photon_summary = photon_combined_df.groupby("OS according to the VMware Tools").size().reset_index(name='Count')
@@ -101,127 +103,77 @@ def parallel_process_files(file_paths, capacity_ranges):
 
 def insert_break_and_sum(df):
     """Insert sum row and ensure column exists."""
+    # Check if 'OS according to the configuration file' exists
+    if 'OS according to the configuration file' not in df.columns:
+        raise KeyError("'OS according to the configuration file' column missing in data.")
+
     total_count = df['Count'].sum()
-    break_df = pd.DataFrame({'OS according to the configuration file': ['Disk OS Sum', ''], 'Count': [total_count, '']})
-    df = pd.concat([df, break_df], ignore_index=True)
-    return df
-
-def create_pie_chart(wb, df, title):
-    """Create a pie chart and pivot table in the worksheet."""
-    ws = wb.create_sheet(title)
-    chart = PieChart()
-    chart.title = title
-
-    try:
-        # Filter out the rows that don't have a 'Capacity Range'
-        df = df[df['Capacity Range'].notna()]
-
-        # Group the data by 'Capacity Range' and calculate the sum of 'Count'
-        pivot_table = df.groupby('Capacity Range')['Count'].sum().reset_index()
-
-        # Add a row for the total
-        total_count = pivot_table['Count'].sum()
-        pivot_table.loc[len(pivot_table)] = ['Total', total_count]
-
-        # Create a pivot table in the worksheet
-        ws.append(["Capacity Range", "Count"])  # Updated column headers
-        for r in dataframe_to_rows(pivot_table, index=False, header=True):
-            ws.append(r)
-
-        # Create a pie chart
-        labels = Reference(ws, min_col=1, min_row=2, max_row=len(pivot_table) + 1)  # Updated max row
-        data = Reference(ws, min_col=2, min_row=2, max_row=len(pivot_table) + 1)  # Updated max row
-        chart.add_data(data, titles_from_data=True)
-        chart.set_categories(labels)
-        chart.dataLabels = DataLabelList()
-        chart.dataLabels.showPercent = True
-        ws.add_chart(chart, "E2")
-    except KeyError as e:
-        print(f"The column {e} does not exist in the DataFrame.")
-
-def set_column_widths(sheet):
-    """Set the width of the columns to fit the header length."""
-    for col in sheet.columns:
-        max_length = 0
-        col_letter = col[0].column_letter  # Get the column letter
-        for cell in col:
-            try:  # Get the max length of the column values and header
-                max_length = max(len(str(cell.value)), max_length)
-            except:
-                pass
-        adjusted_width = max_length + 2  # Add some padding for better readability
-        sheet.column_dimensions[col_letter].width = adjusted_width
+    break_df = pd.DataFrame({'OS according to the configuration file': ['Disk OS Sum', ''], 'Count': [total_count, ''], 'Capacity Range': ['', '']})
+    return pd.concat([df, break_df], ignore_index=True)
 
 def main():
-    parser = argparse.ArgumentParser(description="Process Excel files and generate OS disk capacity reports.")
+    parser = argparse.ArgumentParser(
+        description="Process Excel files and generate OS disk capacity reports.",
+        epilog="Example: python3 disk-groupby-capacity.py -s /path/to/source -d /path/to/destination -n os_report"
+    )
     
-<<<<<<< HEAD:disk-groupby-capacity.py
     # Optional command-line arguments
     parser.add_argument('-src', '--source', default='./data', help='Source folder containing Excel files (default: ./data)')
-    parser.add_argument('-dst', '--destination', default='./output', help='Destination folder for the output Excel file (default: ./output)')
-    parser.add_argument('-name', '--name', default='output', help='Name of the output Excel file without extension (default: output)')
-=======
-    # Add both short and long arguments with proper help text
-    parser.add_argument('-s', '--src', default='./data', help='Source folder containing Excel files (default: ./data)')
-    parser.add_argument('-d', '--dst', default='./output', help='Destination folder for the output file (default: ./output)')
-    parser.add_argument('-n', '--name', default='output', help="Base name of the output file without extension (default: output)")
->>>>>>> main:checkme3.py
+    parser.add_argument('-dst', '--destination', default='./output', help='Destination folder for the output CSV file (default: ./output)')
+    parser.add_argument('-name', '--name', default='output.csv', help='Name of the output CSV file (default: output.csv)')
 
     args = parser.parse_args()
 
-    # Ask if the user wants to create charts
-    create_charts = input("Do you want to create tables and pie charts in Excel (y/n)? ").lower()
+    # Resolve paths to absolute paths
+    src_folder = os.path.abspath(args.source)
+    dst_folder = os.path.abspath(args.destination)
 
-    if create_charts == 'y':
-        file_extension = '.xlsx'
-    else:
-        file_extension = '.csv'
-
-    src_folder = os.path.abspath(args.src)
-    dst_folder = os.path.abspath(args.dst)
-    output_file = os.path.join(dst_folder, f"{args.name}{file_extension}")
-
-    # Get all Excel files in the source directory
+    # Get the list of Excel files from the source folder
     file_paths = [os.path.join(src_folder, f) for f in os.listdir(src_folder) if f.endswith('.xlsx')]
 
+    # Define capacity ranges
     capacity_ranges = [
-        (0, 149, '0 MB - 149 MB'),
+        (0, 149, '0 MB - 149 MB'),  # Place 0 MB - 149 MB first
         (150, 2000000, '150 MB - 2 TB'),
         (2000001, 10000000, '2 TB - 10 TB'),
         (10000001, 20000000, '10 TB - 20 TB'),
         (20000001, 40000000, '20 TB - 40 TB')
     ]
 
+    # Create destination folder if it doesn't exist
     os.makedirs(dst_folder, exist_ok=True)
 
+    # Process files in parallel and gather OS and Photon OS data
     combined_results_by_range, photon_combined, unique_os_filters = parallel_process_files(file_paths, capacity_ranges)
 
-    if file_extension == '.xlsx':
-        wb = Workbook()
-        ws = wb.active
+    combined_results = pd.DataFrame()
+    for label, os_summary in combined_results_by_range.items():
+        if not os_summary.empty:  # Ensure to only process non-empty results
+            os_summary['Capacity Range'] = label
+            os_summary_with_sum = insert_break_and_sum(os_summary)
+            combined_results = pd.concat([combined_results, os_summary_with_sum], ignore_index=True)
 
-        for i, (label, df) in enumerate(combined_results_by_range.items()):
-            df = insert_break_and_sum(df)
-            create_pie_chart(wb, df, label)
+    # Check if the 'OS according to the configuration file' column exists before summing
+    if 'OS according to the configuration file' in combined_results.columns:
+        # Calculate total sum of all group sums
+        total_machine_count = combined_results[combined_results['OS according to the configuration file'] == 'Disk OS Sum']['Count'].sum()
 
-        ws = wb.create_sheet("VMware Photon OS")
-        ws.append(["OS according to the VMware Tools", "Count"])
-        for r in dataframe_to_rows(photon_combined, index=False, header=True):
-            ws.append(r)
-        create_pie_chart(wb, photon_combined, "VMware Photon OS")
+        # Add a row for the total sum at the end
+        total_row = pd.DataFrame({'OS according to the configuration file': ['Total Machine Count'], 'Count': [total_machine_count], 'Capacity Range': ['']})
+        combined_results = pd.concat([combined_results, total_row], ignore_index=True)
 
-        wb.save(output_file)
+        # Insert a blank row after the "Total Machine Count" row
+        blank_row = pd.DataFrame({
+            'OS according to the configuration file': [''],
+            'Count': [''],
+            'Capacity Range': [''],
+            'OS according to the VMware Tools': ['']
+        })
+        combined_results = pd.concat([combined_results, blank_row], ignore_index=True)
+
     else:
-        with open(output_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            for label, df in combined_results_by_range.items():
-                df = insert_break_and_sum(df)
-                writer.writerow([label])
-                writer.writerow(["OS according to the configuration file", "Count"])
-                writer.writerows(df.values.tolist())
-                writer.writerow([])
+        print("The column 'OS according to the configuration file' does not exist in the combined results.")
 
-<<<<<<< HEAD:disk-groupby-capacity.py
     # Insert sum row for Photon OS if photon_combined is not empty
     if not photon_combined.empty:
         photon_combined['Capacity Range'] = 'All Capacities'
@@ -239,22 +191,11 @@ def main():
         columns_order = ['OS according to the configuration file', 'Count', 'Capacity Range', 'OS according to the VMware Tools']
         combined_results = combined_results[columns_order]
 
-    # Output the combined result to a single Excel file using the openpyxl engine
+    # Output the combined result to a single CSV file
     output_file = os.path.join(dst_folder, f"{args.name}.xlsx")
-    combined_results.to_excel(output_file, index=False, engine='openpyxl')
-
-    # Load the file and set column widths
-    workbook = load_workbook(output_file)
-    sheet = workbook.active
-    set_column_widths(sheet)
-    workbook.save(output_file)
+    combined_results.to_csv(output_file, index=False)
 
     print(f"Combined results including VMware Photon OS saved to {output_file}")
-=======
-            writer.writerow(["VMware Photon OS"])
-            writer.writerow(["OS according to the VMware Tools", "Count"])
-            writer.writerows(photon_combined.values.tolist())
->>>>>>> main:checkme3.py
 
 if __name__ == "__main__":
     main()
