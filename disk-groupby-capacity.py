@@ -209,7 +209,6 @@ def main():
                 writer.writerows(df.values.tolist())
                 writer.writerow([])
 
-<<<<<<< HEAD:disk-groupby-capacity.py
     # Insert sum row for Photon OS if photon_combined is not empty
     if not photon_combined.empty:
         photon_combined['Capacity Range'] = 'All Capacities'
@@ -238,11 +237,9 @@ def main():
     workbook.save(output_file)
 
     print(f"Combined results including VMware Photon OS saved to {output_file}")
-=======
             writer.writerow(["VMware Photon OS"])
             writer.writerow(["OS according to the VMware Tools", "Count"])
             writer.writerows(photon_combined.values.tolist())
->>>>>>> main:checkme3.py
 
 if __name__ == "__main__":
     main()
