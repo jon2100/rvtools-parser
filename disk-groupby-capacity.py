@@ -112,7 +112,10 @@ def insert_break_and_sum(df):
     return pd.concat([df, break_df], ignore_index=True)
 
 def main():
-    parser = argparse.ArgumentParser(description="Process Excel files and generate OS disk capacity reports.")
+    parser = argparse.ArgumentParser(
+        description="Process Excel files and generate OS disk capacity reports.",
+        epilog="Example: python3 disk-groupby-capacity.py -s /path/to/source -d /path/to/destination -n os_report"
+    )
     
     # Optional command-line arguments
     parser.add_argument('-src', '--source', default='./data', help='Source folder containing Excel files (default: ./data)')
