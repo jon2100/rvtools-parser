@@ -159,12 +159,15 @@ def main():
     parser.add_argument('-s', '--src', default='./data', help='Source folder containing Excel files (default: ./data)')
     parser.add_argument('-d', '--dst', default='./output', help='Destination folder for the output file (default: ./output)')
     parser.add_argument('-n', '--name', default='output', help="Base name of the output file without extension (default: output)")
+    parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='Displays this help')
 
     args = parser.parse_args()
 
     src_folder = os.path.abspath(args.src)
     dst_folder = os.path.abspath(args.dst)
     output_file = os.path.join(dst_folder, f"{args.name}{file_extension}")
+    # Example usage in the terminal:
+    # python3 disk-groupby-capacity.py -s /path/to/source -d /path/to/destination -n os_report
 
     # Get all Excel files in the source directory
     file_paths = [os.path.join(src_folder, f) for f in os.listdir(src_folder) if f.endswith('.xlsx')]
