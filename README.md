@@ -36,6 +36,7 @@ pip install pandas openpyxl tqdm
 -dst / --destination: Specify the destination directory where the output file should be saved. (Default: ./output)  
 
 -name / --name: The name of the output Excel file without an extension. (Default: output)
+-h / --help: Displays this help.
 ```
 
 ### Example Command
