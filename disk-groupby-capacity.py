@@ -155,27 +155,12 @@ def set_column_widths(sheet):
 def main():
     parser = argparse.ArgumentParser(description="Process Excel files and generate OS disk capacity reports.")
     
-<<<<<<< HEAD:disk-groupby-capacity.py
-    # Optional command-line arguments
-    parser.add_argument('-src', '--source', default='./data', help='Source folder containing Excel files (default: ./data)')
-    parser.add_argument('-dst', '--destination', default='./output', help='Destination folder for the output Excel file (default: ./output)')
-    parser.add_argument('-name', '--name', default='output', help='Name of the output Excel file without extension (default: output)')
-=======
     # Add both short and long arguments with proper help text
     parser.add_argument('-s', '--src', default='./data', help='Source folder containing Excel files (default: ./data)')
     parser.add_argument('-d', '--dst', default='./output', help='Destination folder for the output file (default: ./output)')
     parser.add_argument('-n', '--name', default='output', help="Base name of the output file without extension (default: output)")
->>>>>>> main:checkme3.py
 
     args = parser.parse_args()
-
-    # Ask if the user wants to create charts
-    create_charts = input("Do you want to create tables and pie charts in Excel (y/n)? ").lower()
-
-    if create_charts == 'y':
-        file_extension = '.xlsx'
-    else:
-        file_extension = '.csv'
 
     src_folder = os.path.abspath(args.src)
     dst_folder = os.path.abspath(args.dst)
