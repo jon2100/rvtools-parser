@@ -85,3 +85,9 @@ The output file will contain the following columns:
 ## License
 This project is licensed under the GNU General Public License v3.0. You may copy, distribute, and modify the software under the terms of the GNU GPL as published by the Free Software Foundation.
 
+## Todo
+* Add graphing / piviot table 
+* Check for "OS according to the VMware Tools" if empty then use OS according to the configuration file"
+* Option to sort by vcenter if muliple vcenter
+* Option to sort by muliple clusters
+* Option to sort by env if env labels exist 
