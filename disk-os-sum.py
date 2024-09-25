@@ -18,8 +18,12 @@ def process_file(file_path, os_filters, capacity_ranges):
     # Convert all column headers to strings to avoid the UserWarning
     df.columns = df.columns.map(str)
 
-    # Ensure numeric columns are properly converted to numeric values
-    df = df.apply(pd.to_numeric, errors='ignore')
+    # Try to convert numeric columns to numeric values, catching exceptions explicitly
+    for col in df.columns:
+        try:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        except Exception:
+            pass
 
     os_col_candidates = df.columns[df.columns.str.contains("OS according to the configuration file", case=False)]
     if os_col_candidates.empty:

@@ -3,9 +3,12 @@
 import pandas as pd
 import os
 import argparse
+import openpyxl
+from openpyxl.chart import PieChart, Reference
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.chart import PieChart, Reference
+from openpyxl.chart.label import DataLabelList
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
@@ -57,6 +60,7 @@ def process_file(file_path, os_filters, capacity_ranges):
     return results_by_range, photon_result, df[os_col].dropna().unique()
 
 def parallel_process_files(file_paths, capacity_ranges):
+    """Process files in parallel, returning the combined OS results for all capacity ranges and VMware Photon OS results."""
     all_results_by_range = {label: [] for _, _, label in capacity_ranges}
     photon_results = []
     unique_os_filters = set()
@@ -95,64 +99,68 @@ def parallel_process_files(file_paths, capacity_ranges):
     return combined_results_by_range, photon_summary, unique_os_filters
 
 def insert_break_and_sum(df):
+    """Insert sum row and ensure column exists."""
     total_count = df['Count'].sum()
-    break_df = pd.DataFrame({'OS according to the configuration file': ['Disk OS Sum', ''], 'Count': [total_count, ''], 'Capacity Range': ['', '']})
-    return pd.concat([df, break_df], ignore_index=True)
+    break_df = pd.DataFrame({'OS according to the configuration file': ['Disk OS Sum', ''], 'Count': [total_count, '']})
+    df = pd.concat([df, break_df], ignore_index=True)
+    return df
 
-def create_pivot_table(df):
-    filtered_df = df[~df['OS according to the configuration file'].isin(['Total Machine Count', 'VMware Photon OS (64-bit)'])]
-    disk_os_sum_df = filtered_df[filtered_df['OS according to the configuration file'] == 'Disk OS Sum']
-    total_disk_os_sum = disk_os_sum_df['Count'].sum()
-
-    disk_os_sum_df.loc[:, 'Percentage'] = (disk_os_sum_df['Count'] / total_disk_os_sum) * 100  # Fixed the SettingWithCopyWarning by using .loc[]
-    pivot_table = disk_os_sum_df[['Capacity Range', 'Count', 'Percentage']]
-    
-    return pivot_table
-
-def add_pie_chart(ws, start_row, title, labels_col, values_col, data_len):
+def create_pie_chart(wb, df, title):
+    """Create a pie chart and pivot table in the worksheet."""
+    ws = wb.create_sheet(title)
     chart = PieChart()
     chart.title = title
-    labels_ref = Reference(ws, min_col=labels_col, min_row=start_row, max_row=start_row + data_len - 1)
-    data_ref = Reference(ws, min_col=values_col, min_row=start_row, max_row=start_row + data_len - 1)
-    chart.add_data(data_ref, titles_from_data=True)
-    chart.set_categories(labels_ref)
-    ws.add_chart(chart, f"E{start_row}")
 
-def save_with_charts(df, pivot_table, output_file):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Disk OS Data"
+    try:
+        # Filter out the rows that don't have a 'Capacity Range'
+        df = df[df['Capacity Range'].notna()]
 
-    for r in dataframe_to_rows(df, index=False, header=True):
-        ws.append(r)
+        # Group the data by 'Capacity Range' and calculate the sum of 'Count'
+        pivot_table = df.groupby('Capacity Range')['Count'].sum().reset_index()
 
-    ws.append([])  # Blank row for separation
+        # Add a row for the total
+        total_count = pivot_table['Count'].sum()
+        pivot_table.loc[len(pivot_table)] = ['Total', total_count]
 
-    # First Pie Chart for "Disk OS Sum"
-    disk_os_sum_data_len = len(df[df['OS according to the configuration file'] == 'Disk OS Sum'])
-    add_pie_chart(ws, len(df) + 3, "OS Disk Sum for All OSes", labels_col=1, values_col=2, data_len=disk_os_sum_data_len)
+        # Create a pivot table in the worksheet
+        ws.append(["Capacity Range", "Count"])  # Updated column headers
+        for r in dataframe_to_rows(pivot_table, index=False, header=True):
+            ws.append(r)
 
-    ws.append(['Pivot Table - OS Disk Sum Percentage'])
-    for r in dataframe_to_rows(pivot_table, index=False, header=True):
-        ws.append(r)
-
-    # Second Pie Chart for Capacity Ranges
-    pivot_data_len = len(pivot_table)
-    pivot_start_row = len(df) + len(pivot_table) + 5
-    add_pie_chart(ws, pivot_start_row, "Capacity Range Percentages", labels_col=1, values_col=2, data_len=pivot_data_len)
-
-    wb.save(output_file)
+        # Create a pie chart
+        labels = Reference(ws, min_col=1, min_row=2, max_row=len(pivot_table) + 1)  # Updated max row
+        data = Reference(ws, min_col=2, min_row=2, max_row=len(pivot_table) + 1)  # Updated max row
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(labels)
+        chart.dataLabels = DataLabelList()
+        chart.dataLabels.showPercent = True
+        ws.add_chart(chart, "E2")
+    except KeyError as e:
+        print(f"The column {e} does not exist in the DataFrame.")
 
 def main():
     parser = argparse.ArgumentParser(description="Process Excel files and generate OS disk capacity reports.")
-    parser.add_argument('-src', '--source', default='./data', help='Source folder containing Excel files (default: ./data)')
-    parser.add_argument('-dst', '--destination', default='./output', help='Destination folder for the output Excel file (default: ./output)')
-    parser.add_argument('-name', '--name', default='output.xlsx', help='Name of the output Excel file (default: output.xlsx)')
+    
+    # Add both short and long arguments with proper help text
+    parser.add_argument('-s', '--src', default='./data', help='Source folder containing Excel files (default: ./data)')
+    parser.add_argument('-d', '--dst', default='./output', help='Destination folder for the output file (default: ./output)')
+    parser.add_argument('-n', '--name', default='output', help="Base name of the output file without extension (default: output)")
+
     args = parser.parse_args()
 
-    src_folder = os.path.abspath(args.source)
-    dst_folder = os.path.abspath(args.destination)
+    # Ask if the user wants to create charts
+    create_charts = input("Do you want to create tables and pie charts in Excel (y/n)? ").lower()
 
+    if create_charts == 'y':
+        file_extension = '.xlsx'
+    else:
+        file_extension = '.csv'
+
+    src_folder = os.path.abspath(args.src)
+    dst_folder = os.path.abspath(args.dst)
+    output_file = os.path.join(dst_folder, f"{args.name}{file_extension}")
+
+    # Get all Excel files in the source directory
     file_paths = [os.path.join(src_folder, f) for f in os.listdir(src_folder) if f.endswith('.xlsx')]
 
     capacity_ranges = [
@@ -167,49 +175,34 @@ def main():
 
     combined_results_by_range, photon_combined, unique_os_filters = parallel_process_files(file_paths, capacity_ranges)
 
-    combined_results = pd.DataFrame()
-    for label, os_summary in combined_results_by_range.items():
-        if not os_summary.empty:
-            os_summary['Capacity Range'] = label
-            os_summary_with_sum = insert_break_and_sum(os_summary)
-            combined_results = pd.concat([combined_results, os_summary_with_sum], ignore_index=True)
+    if file_extension == '.xlsx':
+        wb = Workbook()
+        ws = wb.active
 
-    if 'OS according to the configuration file' in combined_results.columns:
-        total_machine_count = combined_results[combined_results['OS according to the configuration file'] == 'Disk OS Sum']['Count'].sum()
-        total_row = pd.DataFrame({'OS according to the configuration file': ['Total Machine Count'], 'Count': [total_machine_count], 'Capacity Range': ['']})
-        combined_results = pd.concat([combined_results, total_row], ignore_index=True)
+        for i, (label, df) in enumerate(combined_results_by_range.items()):
+            df = insert_break_and_sum(df)
+            create_pie_chart(wb, df, label)
 
-        blank_row = pd.DataFrame({'OS according to the configuration file': [''], 'Count': [''], 'Capacity Range': [''], 'OS according to the VMware Tools': ['']})
-        combined_results = pd.concat([combined_results, blank_row], ignore_index=True)
+        ws = wb.create_sheet("VMware Photon OS")
+        ws.append(["OS according to the VMware Tools", "Count"])
+        for r in dataframe_to_rows(photon_combined, index=False, header=True):
+            ws.append(r)
+        create_pie_chart(wb, photon_combined, "VMware Photon OS")
 
-    if not photon_combined.empty:
-        photon_combined['Capacity Range'] = 'All Capacities'
-        photon_combined['OS according to the configuration file'] = 'VMware Photon OS (64-bit)'
-        photon_count = photon_combined['Count'].sum()
-        photon_total_row = pd.DataFrame({
-            'OS according to the configuration file': ['Disk OS Sum'],
-            'Count': [photon_count],
-            'Capacity Range': ['All Capacities']
-        })
-        combined_results = pd.concat([combined_results, photon_combined, photon_total_row], ignore_index=True)
+        wb.save(output_file)
+    else:
+        with open(output_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            for label, df in combined_results_by_range.items():
+                df = insert_break_and_sum(df)
+                writer.writerow([label])
+                writer.writerow(["OS according to the configuration file", "Count"])
+                writer.writerows(df.values.tolist())
+                writer.writerow([])
 
-        blank_row_after_photon = pd.DataFrame({
-            'OS according to the configuration file': [''],
-            'Count': [''],
-            'Capacity Range': [''],
-            'OS according to the VMware Tools': ['']
-        })
-        combined_results = pd.concat([combined_results, blank_row_after_photon], ignore_index=True)
-
-    if 'OS according to the configuration file' in combined_results.columns and 'OS according to the VMware Tools' in combined_results.columns:
-        columns_order = ['OS according to the configuration file', 'Count', 'Capacity Range', 'OS according to the VMware Tools']
-        combined_results = combined_results[columns_order]
-
-    pivot_table = create_pivot_table(combined_results)
-    output_file = os.path.join(dst_folder, args.name)
-    save_with_charts(combined_results, pivot_table, output_file)
-
-    print(f"Combined results and charts saved to {output_file}")
+            writer.writerow(["VMware Photon OS"])
+            writer.writerow(["OS according to the VMware Tools", "Count"])
+            writer.writerows(photon_combined.values.tolist())
 
 if __name__ == "__main__":
     main()
