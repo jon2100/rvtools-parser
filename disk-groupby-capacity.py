@@ -27,11 +27,11 @@ def process_file(file_path, os_filters, capacity_ranges):
 
     capacity_col = capacity_col_candidates.tolist()[0]  # Use the first matching column
 
-    # Filter out rows that contain 'Template', 'SRM Placeholder', or 'AdditionalBackEnd'
+    # Filter out rows that contain 'Template', 'SRM Placeholder'
     if 'Template' in df.columns and 'SRM Placeholder' in df.columns:
         df = df[(df['Template'] != True) & (df['SRM Placeholder'] != True)]
 
-    df = df[~df[os_col].astype(str).str.contains('Template|SRM Placeholder|AdditionalBackEnd', case=False, na=False)]
+    df = df[~df[os_col].astype(str).str.contains('Template|SRM Placeholder', case=False, na=False)]
 
     # Convert MiB to MB (if necessary)
     if "MiB" in capacity_col:
