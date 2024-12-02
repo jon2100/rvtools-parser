@@ -206,44 +206,11 @@ def format_os_disk_count_sheet(results_by_range, photon_summary):
     full_df = pd.concat([full_df, overall_total_row, photon_row], ignore_index=True)
     return full_df
 
-def format_environment_summary(environment_data):
-    """Format the Environment tab with each environment's OS breakdown and totals for each environment."""
-    full_env_df = pd.DataFrame()  # Initialize the full environment DataFrame
-    overall_total_count = 0  # To keep track of the overall total count
-
-    # Group by Environment and Final OS, and count occurrences
-    env_summary = environment_data.groupby(['Environment', 'Final OS']).size().reset_index(name='Count')
-    
-    # Group by environment to get the main environment count summary
-    env_total_summary = environment_data['Environment'].value_counts().reset_index()
-    env_total_summary.columns = ['Environment', 'Count']
-
-    # Append the environment summary and detailed OS counts
-    for environment, total_count in env_total_summary.itertuples(index=False):
-        # Add the environment total row
-        total_row = pd.DataFrame({'Environment': [environment], 'Count': [total_count], 'Final OS': ['']})
-        full_env_df = pd.concat([full_env_df, total_row], ignore_index=True)
-        overall_total_count += total_count  # Add to overall total
-
-        # Add each OS breakdown within this environment
-        os_breakdown = env_summary[env_summary['Environment'] == environment][['Final OS', 'Count']]
-        os_breakdown['Environment'] = ''  # Clear 'Environment' for detailed rows
-        full_env_df = pd.concat([full_env_df, os_breakdown], ignore_index=True)
-
-        # Add a separator row after each environment's breakdown
-        separator_row = pd.DataFrame({'Environment': [''], 'Count': [''], 'Final OS': ['']})
-        full_env_df = pd.concat([full_env_df, separator_row], ignore_index=True)
-
-    # Add the overall total count row at the end
-    overall_total_row = pd.DataFrame({'Environment': ['Overall Total'], 'Count': [overall_total_count], 'Final OS': ['']})
-    full_env_df = pd.concat([full_env_df, overall_total_row], ignore_index=True)
-
-    return full_env_df[['Environment', 'Final OS', 'Count']]
-
 def adjust_column_widths(writer, dataframe, sheet_name):
     """Adjust column widths based on the length of the data in each column."""
     worksheet = writer.sheets[sheet_name]
     for column in dataframe.columns:
+        # Ensure all data is converted to string to avoid TypeError with integers
         column_length = max(dataframe[column].astype(str).map(len).max(), len(str(column)))
         col_idx = dataframe.columns.get_loc(column)
         worksheet.set_column(col_idx, col_idx, column_length + 2)
@@ -335,7 +302,17 @@ def main():
 
         # Write Environment summary with counts for each OS in each environment
         if not env_summary.empty:
-            full_env_summary = format_environment_summary(environment_data)
+            full_env_summary = pd.DataFrame()
+            for env in env_summary['Environment']:
+                env_df = environment_data[environment_data['Environment'] == env]
+                os_counts = env_df['Final OS'].value_counts().reset_index()
+                os_counts.columns = ['Operating System', 'Count']
+                env_header = pd.DataFrame({'Operating System': [env], 'Count': [env_summary[env_summary['Environment'] == env]['Count'].values[0]]})
+                env_total_row = pd.DataFrame({'Operating System': ['Total'], 'Count': [os_counts['Count'].sum()]})
+                full_env_summary = pd.concat([full_env_summary, env_header, os_counts, env_total_row, pd.DataFrame([['', '']])], ignore_index=True)
+
+            overall_total_row = pd.DataFrame({'Operating System': ['Overall Total'], 'Count': [full_env_summary['Count'].sum()]})
+            full_env_summary = pd.concat([full_env_summary, overall_total_row], ignore_index=True)
             full_env_summary.to_excel(writer, index=False, sheet_name='Environment')
             adjust_column_widths(writer, full_env_summary, 'Environment')
 

@@ -1,0 +1,16 @@
+Red Hat Enterprise 7
+Red Hat Enterprise 8
+Red Hat Enterprise 9
+Windows 10
+Windows 11
+Windows Server 2016
+Windows Server 2019
+Windows Server 2022
+SUSE Linux Enterprise 15
+Ubuntu 18.04
+Ubuntu 20.04
+Ubuntu 22.04
+Ubuntu 24.04
+Fedora 30
+Fedora 40
+CentOS 9

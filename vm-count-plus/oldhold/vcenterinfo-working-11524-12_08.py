@@ -32,16 +32,13 @@ def process_file(file_path, capacity_ranges, ignore_powered_off, ignore_patterns
         regex_pattern = '|'.join(ignore_patterns)
         df = df[~df['Name'].astype(str).str.contains(regex_pattern, case=False, na=False)]
 
-    # Apply --ignore-vm filter to Cluster, Folder, Function, and Annotation columns
+    # Apply --ignore-vm filter to either Cluster or Folder columns
     if ignore_vm_folder:
         vm_folder_patterns = ignore_vm_folder.split(',')
-        regex_filter = '|'.join([pattern.strip() for pattern in vm_folder_patterns])
-
-        # Filter for each relevant column if it exists in the DataFrame
-        columns_to_filter = ['Cluster', 'Folder', 'Function', 'Annotation']
-        for col in columns_to_filter:
-            if col in df.columns:
-                df = df[~df[col].astype(str).str.contains(regex_filter, case=False, na=False)]
+        regex_folder = '|'.join([pattern.strip() for pattern in vm_folder_patterns])
+        cluster_filter = df['Cluster'].astype(str).str.contains(regex_folder, case=False, na=False) if 'Cluster' in df.columns else pd.Series([False] * len(df))
+        folder_filter = df['Folder'].astype(str).str.contains(regex_folder, case=False, na=False) if 'Folder' in df.columns else pd.Series([False] * len(df))
+        df = df[~(cluster_filter | folder_filter)]
 
     # Identify OS columns
     os_config_col_candidates = df.columns[df.columns.str.contains("OS according to the configuration file", case=False)]
@@ -179,31 +176,51 @@ def parallel_process_files(file_paths, capacity_ranges, ignore_powered_off, igno
 
     return combined_results_by_range, combined_cluster_summary, photon_summary, combined_os_summary, environment_data
 
-def format_os_disk_count_sheet(results_by_range, photon_summary):
-    """Format the OS Disk Count sheet with totals for each range and an overall total."""
-    full_df = pd.DataFrame()
-    overall_total_count = 0
+def format_os_disk_count_sheet(combined_results_by_range, photon_summary):
+    """Format the OS_Disk_Count sheet with totals for each range and an overall total."""
+    full_df = pd.DataFrame()  # Initialize empty DataFrame for the full content
+    overall_total_count = 0  # To keep track of the overall total count
 
-    for label, grouped_result in results_by_range.items():
+    # Process each capacity range
+    for label, grouped_result in combined_results_by_range.items():
         if not grouped_result.empty:
-            # Set the 'Capacity Range' column for the group only once
-            grouped_result = grouped_result.copy()
-            grouped_result['Capacity Range'] = label  # Set capacity range once for the group
-            group_total = grouped_result['Count'].sum()
-            overall_total_count += group_total
+            # Ensure 'Count' column is numeric; convert or coerce errors to NaN, then fill NaN with 0
+            grouped_result['Count'] = pd.to_numeric(grouped_result['Count'], errors='coerce').fillna(0).astype(int)
+            
+            # Set Capacity Range only for the OS entries, not for the total row
+            grouped_result['Capacity Range'] = label
 
-            # Add group total row and separate rows for each range
-            total_row = pd.DataFrame({'Final OS': ['Group Total'], 'Count': [group_total], 'Capacity Range': ['']})
+            # Calculate the group total for this range
+            group_total = grouped_result['Count'].sum()
+            overall_total_count += group_total  # Add to overall total
+
+            # Prepare the group total row without the Capacity Range
+            total_row = pd.DataFrame({
+                'Final OS': ['Group Total'],
+                'Count': [group_total],
+                'Capacity Range': ['']  # Leave Capacity Range empty for group total
+            })
+            
+            # Append the group data, the group total, and an empty separator row to the main DataFrame
             separator_row = pd.DataFrame({'Final OS': [''], 'Count': [''], 'Capacity Range': ['']})
             full_df = pd.concat([full_df, grouped_result, total_row, separator_row], ignore_index=True)
 
     # Append overall total and Photon OS count rows at the end
-    overall_total_row = pd.DataFrame({'Final OS': ['Overall Total OS Count'], 'Count': [overall_total_count], 'Capacity Range': ['']})
+    overall_total_row = pd.DataFrame({
+        'Final OS': ['Overall Total OS Count'],
+        'Count': [overall_total_count],
+        'Capacity Range': ['']
+    })
     photon_count = photon_summary['Count'].iloc[0] if not photon_summary.empty else 0
-    photon_row = pd.DataFrame({'Final OS': ['Photon OS Count'], 'Count': [photon_count], 'Capacity Range': ['']})
+    photon_row = pd.DataFrame({
+        'Final OS': ['Photon OS Count'],
+        'Count': [photon_count],
+        'Capacity Range': ['']
+    })
 
     # Append the final totals to the main DataFrame
     full_df = pd.concat([full_df, overall_total_row, photon_row], ignore_index=True)
+
     return full_df
 
 def format_environment_summary(environment_data):
@@ -244,7 +261,7 @@ def adjust_column_widths(writer, dataframe, sheet_name):
     """Adjust column widths based on the length of the data in each column."""
     worksheet = writer.sheets[sheet_name]
     for column in dataframe.columns:
-        column_length = max(dataframe[column].astype(str).map(len).max(), len(str(column)))
+        column_length = max(dataframe[column].astype(str).map(len).max(), len(column))
         col_idx = dataframe.columns.get_loc(column)
         worksheet.set_column(col_idx, col_idx, column_length + 2)
 
@@ -302,10 +319,11 @@ def main():
         environment_data['Environment'] = environment_data['Cluster'].apply(
             lambda x: next((pattern for pattern in env_patterns if pattern in x.upper()), 'UNKNOWN')
         )
-        env_summary = environment_data.groupby('Environment').size().reset_index(name='Count')
-        env_summary = env_summary[env_summary['Count'] > 0]  # Filter out zero counts
+
+        # Generate the detailed environment summary with OS breakdowns
+        env_summary_df = format_environment_summary(environment_data)
     else:
-        env_summary = pd.DataFrame(columns=['Environment', 'Count'])
+        env_summary_df = pd.DataFrame(columns=['Environment', 'Final OS', 'Count'])
 
     # Writing to Excel
     with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
@@ -325,6 +343,7 @@ def main():
                 'Total_Disk_Capacity_TB': [combined_cluster_summary['Total_Disk_Capacity_TB'].sum()]
             })
             combined_cluster_summary = pd.concat([combined_cluster_summary, empty_row_cluster, total_row], ignore_index=True)
+            
             combined_cluster_summary.to_excel(writer, index=False, sheet_name='vCluster VM Count')
             adjust_column_widths(writer, combined_cluster_summary, 'vCluster VM Count')
 
@@ -333,11 +352,10 @@ def main():
             combined_os_summary.to_excel(writer, index=False, sheet_name='OS_Summary')
             adjust_column_widths(writer, combined_os_summary, 'OS_Summary')
 
-        # Write Environment summary with counts for each OS in each environment
-        if not env_summary.empty:
-            full_env_summary = format_environment_summary(environment_data)
-            full_env_summary.to_excel(writer, index=False, sheet_name='Environment')
-            adjust_column_widths(writer, full_env_summary, 'Environment')
+        # Write Environment summary with OS breakdown and totals
+        if not env_summary_df.empty:
+            env_summary_df.to_excel(writer, index=False, sheet_name='Environment')
+            adjust_column_widths(writer, env_summary_df, 'Environment')
 
     print(f"Combined results saved to {output_file}")
 
